@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Tableau de bord ANACIM</title>
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0B2A3C">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ANACIM">
+<meta name="application-name" content="ANACIM">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+<style>
+:root{--ocean:#0B2A3C;--bleu:#1D4E9E;--or:#F4C542;--doux:#9FBACB}
+*{box-sizing:border-box;margin:0}
+body{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--ocean);
+  font-family:"Segoe UI",Arial,sans-serif;color:#fff;padding:20px}
+.carte{width:100%;max-width:420px;background:#12394F;border-radius:12px;overflow:hidden}
+.rep{background:var(--bleu);text-align:center;font:600 12px Georgia,serif;letter-spacing:.05em;padding:7px}
+.bande{display:grid;grid-template-columns:3fr 2fr;gap:4px;height:5px}.bande i{background:var(--bleu)}.bande i+i{background:var(--or)}
+.corps{padding:26px 26px 24px}
+h1{font:600 26px "Arial Narrow",Arial,sans-serif;margin-bottom:6px}
+p{color:var(--doux);font-size:14px;line-height:1.45;margin-bottom:18px}
+label{display:block;font-size:14px;margin-bottom:6px}
+.saisie{display:flex;gap:6px}
+.saisie input{flex:1;min-width:0;font-size:17px;padding:11px 12px;border-radius:6px;border:1px solid #3A6078;background:#0B2A3C;color:#fff}
+.voir{width:auto;flex:none;background:#1D4A62;font-size:14px;font-weight:600;padding:0 12px}
+.etape{color:var(--doux);font-size:14px;min-height:20px;margin-top:12px}
+.case{display:flex;gap:8px;align-items:center;font-size:14px;color:var(--doux);margin:12px 0 18px}
+button{width:100%;font-size:16px;font-weight:700;padding:12px;border:0;border-radius:6px;background:#1F7A8C;color:#fff;cursor:pointer}
+button:disabled{opacity:.6;cursor:wait}
+.err{color:#FFA597;font-size:14px;min-height:20px;margin-top:12px}
+:focus-visible{outline:3px solid var(--or);outline-offset:2px}
+</style></head><body>
+<main class="carte">
+  <div class="rep">RÉPUBLIQUE DU SÉNÉGAL</div><div class="bande"><i></i><i></i></div>
+  <form class="corps" id="f" autocomplete="on">
+    <h1>Tableau de bord ANACIM</h1>
+    <p>Accès réservé aux agents de l'ANACIM. Saisissez le mot de passe communiqué par le service de la prévision.</p>
+    <label for="m">Mot de passe</label>
+    <div class="saisie">
+      <input type="password" id="m" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" required autofocus>
+      <button type="button" class="voir" id="v" aria-pressed="false">Afficher</button>
+    </div>
+    <label class="case"><input type="checkbox" id="r" checked> Se souvenir sur cet appareil</label>
+    <button id="b">Ouvrir</button>
+    <div class="etape" id="s" aria-live="polite"></div>
+    <div class="err" id="e" role="alert"></div>
+  </form>
+</main>
+<script>
+// Données chiffrées dans le fichier voisin « <page>.bin » : sel (16 o) + IV (12 o) + contenu AES-GCM.
+// Téléchargées en binaire (pas de décodage de texte) : fonctionne aussi sur téléphone.
+const ITER = 310000, CLE_MEM = "anacim-tdb-mdp";
+const FICHIER = (location.pathname.split("/").pop() || "index.html") + ".bin";
+const $ = id => document.getElementById(id);
+const etape = t => { $("s").textContent = t; };
+class MauvaisMdp extends Error {}
+let donnees = null;
+async function charger() {
+  if (donnees) return donnees;
+  const r = await fetch(FICHIER, { cache: "no-cache" });
+  if (!r.ok) throw new Error(`fichier ${FICHIER} introuvable (${r.status})`);
+  return (donnees = new Uint8Array(await r.arrayBuffer()));
+}
+async function ouvrir(mdp) {
+  etape("Téléchargement du tableau de bord…");
+  const b = await charger();
+  etape("Déchiffrement…");
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(mdp), "PBKDF2", false, ["deriveKey"]);
+  const cle = await crypto.subtle.deriveKey({ name: "PBKDF2", salt: b.subarray(0, 16), iterations: ITER, hash: "SHA-256" },
+    base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+  let clair;
+  try { clair = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b.subarray(16, 28) }, cle, b.subarray(28)); }
+  catch (_) { throw new MauvaisMdp(); }
+  etape("Affichage…");
+  const flux = new Blob([clair]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return await new Response(flux).text();
+}
+async function essayer(mdp, retenir) {
+  mdp = mdp.trim();
+  const b = $("b"), e = $("e");
+  b.disabled = true; b.textContent = "Ouverture…"; e.textContent = "";
+  try {
+    if (!(window.crypto && crypto.subtle && window.DecompressionStream))
+      throw new Error("navigateur trop ancien : mettez à jour Chrome, Edge, Firefox ou Safari");
+    const page = await ouvrir(mdp);
+    try { retenir ? localStorage.setItem(CLE_MEM, mdp) : sessionStorage.setItem(CLE_MEM, mdp); } catch (_) {}
+    document.open(); document.write(page); document.close();
+  } catch (err) {
+    etape("");
+    if (err instanceof MauvaisMdp) {
+      try { localStorage.removeItem(CLE_MEM); sessionStorage.removeItem(CLE_MEM); } catch (_) {}
+      e.textContent = "Mot de passe incorrect. Vérifiez-le avec le bouton Afficher (majuscules, espaces).";
+    } else {
+      e.textContent = "Ouverture impossible : " + (err && err.message ? err.message : err)
+        + ". Vérifiez la connexion Internet puis réessayez.";
+    }
+    b.disabled = false; b.textContent = "Ouvrir";
+  }
+}
+$("v").addEventListener("click", () => {
+  const m = $("m"), vis = m.type === "password";
+  m.type = vis ? "text" : "password"; $("v").textContent = vis ? "Masquer" : "Afficher";
+  $("v").setAttribute("aria-pressed", String(vis)); m.focus();
+});
+$("f").addEventListener("submit", ev => { ev.preventDefault(); essayer($("m").value, $("r").checked); });
+let memo = null; try { memo = sessionStorage.getItem(CLE_MEM) || localStorage.getItem(CLE_MEM); } catch (_) {}
+if (memo) essayer(memo, !!localStorage.getItem(CLE_MEM));
+</script>
+</body></html>
+<!-- anacim-chiffre -->
